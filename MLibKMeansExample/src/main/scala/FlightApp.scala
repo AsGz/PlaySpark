@@ -47,15 +47,15 @@ object FlightApp {
                 println("task start...")
 
                 val cnFlight = sqlContext.read.jdbc(url,"gps_location",Array("country_code='CN'"),prop)
-                val allCitys =  cnFlight.select("gps_city").distinct
+                //val allCitys =  cnFlight.select("gps_city").distinct
                 cnFlight.cache()
                 cnFlight.registerTempTable("gps_location")
 
 		//must be simply type, otherwise can't save to db
                 var hotPonits = scala.collection.mutable.Map[String,String]();
 
-		//TODO: here can be optimization use groupBy data
-                allCitys.collect.foreach( c =>{
+		// first version. 
+                /*allCitys.collect.foreach( c =>{
                                 val cityName = c.getString(0)
                                 val cityPoints = sqlContext.sql(s"select gps_city, longitude,latitude from gps_location where gps_city='$cityName'")
                                 //cityPoints.show()
@@ -70,8 +70,22 @@ object FlightApp {
                                 var pointsStr = ""
                                 kMeansModel.clusterCenters.foreach(p => {pointsStr +=  p.apply(0).toString() + "," + p.apply(1).toString() + ";"})
                                 hotPonits(cityName) = pointsStr
+                })*/
+		
+		// here can be optimization use groupBy data
+		val allCitys = cnFlight.map(r => (r.getAs[String]("gps_city"),(r.getAs[Double]("longitude"), r.getAs[Double]("latitude")))).groupByKey()
+                allCitys.collect.foreach( c =>{
+                        val cityName = c._1
+                        val cityPoints = c._2.map(r => Vectors.dense( r._1, r._2 ) )
+                        val vectors = sc.parallelize(cityPoints.toSeq)
+                        vectors.cache()
+                        val kMeansModel = KMeans.train(vectors, 5, 20)
+                        println(s"train clusterCenters of $cityName :")
+                        //kMeansModel.clusterCenters.foreach(println)
+                        var pointsStr = ""
+                        kMeansModel.clusterCenters.foreach(p => {pointsStr +=  p.apply(0).toString() + "," + p.apply(1).toString() + ";"})
+                        hotPonits(cityName) = pointsStr
                 })
-                //hotPonits.foreach(println)
 
 		//turn to DataFrame for save to mysql table
                 var df = sc.parallelize(hotPonits.toList).toDF("city","hot_points")
